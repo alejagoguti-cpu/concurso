@@ -11,6 +11,6 @@ Visor web interactivo (three.js) del modelo Revit de la propuesta de concurso en
 Órbita: arrastrar rota, rueda zoom, clic derecho desplaza, doble clic pivota. Recorrido: W A S D / flechas, Mayús corre. Teclas 1–6: vistas.
 
 ## Créditos
-- Texturas CC0: [ambientCG](https://ambientcg.com) (Grass004, Asphalt026C, Plaster001, Rock035, Wood049, RoofingTiles006, PavingStones070) y [3dtextures.me](https://3dtextures.me) (Cobblestone Irregular Floor 001, Terracotta Floor Tiles 009).
+- Texturas CC0: [ambientCG](https://ambientcg.com) (Grass004, Asphalt026C, Plaster001, Bricks096, Wood049, RoofingTiles006, PavingStones070) y [3dtextures.me](https://3dtextures.me) (Cobblestone Irregular Floor 001, Terracotta Floor Tiles 009).
+- Vegetación: impostores horneados desde modelos escaneados CC0 de [Poly Haven](https://polyhaven.com) (Jacaranda Tree, Island Tree 02) y una palma real modelada; cada árbol se coloca en la posición y altura del ejemplar RPC del modelo Revit.
 - [three.js](https://threejs.org) (MIT) y [three-mesh-bvh](https://github.com/gkjohnson/three-mesh-bvh) (MIT), cargados desde jsDelivr.
-- Árboles: representación 3D generada en el visor en la posición y tamaño de cada ejemplar RPC del modelo Revit.

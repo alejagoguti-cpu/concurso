@@ -146,6 +146,7 @@ function updateSun() {
   sun.color.setRGB(1, 0.78 + 0.22 * warm, 0.6 + 0.4 * warm);
   sun.intensity = 3.4 * THREE.MathUtils.clamp(Math.sin(up) * 2.2, 0.15, 1);
   hemi.intensity = 0.2 + 0.25 * warm;
+  for (const b of treeBillboards) { b.material.uniforms.uLight.value = 0.55 + 0.45 * THREE.MathUtils.clamp(Math.sin(up) * 2, 0, 1); b.material.uniforms.uSunCol.value.copy(sun.color); }
   clearTimeout(envTimer);
   envTimer = setTimeout(() => {
     if (envRT) envRT.dispose();
@@ -211,6 +212,7 @@ async function load() {
       for (let i = 0; i < pa.count; i++) { f[i * 3] = pa.getX(i); f[i * 3 + 1] = pa.getY(i); f[i * 3 + 2] = pa.getZ(i); }
       o.geometry.setAttribute('position', new THREE.BufferAttribute(f, 3));
     }
+    fixNormals(o.geometry);
     const mat = o.material;
     const mname = (mat.name || '').toLowerCase();
     const water = mname.includes('agua');
@@ -234,7 +236,8 @@ async function load() {
   fitShadow();
   updateSun();
 
-  buildTrees();
+  setLoader(0.84, 'Cargando vegetación…');
+  await buildTrees().catch((err) => console.warn('vegetación', err));
   buildLayers();
   applyVisibility();
   buildLabels();
@@ -324,37 +327,145 @@ function mergeColored(parts) {
   out.computeVertexNormals();
   return out;
 }
-function buildTrees() {
+// Impostores: atlas horneados desde árboles escaneados CC0 (Poly Haven: Jacaranda Tree, Island Tree 02)
+// y una palma real de alta densidad; 8 azimuts × 5 elevaciones, mezcla entre vistas vecinas.
+const treeBillboards = [];
+const SPECIES = {
+  palma: { atlas: 'assets/veg/palma_real', gain: 0.8 },
+  copa: { atlas: 'assets/veg/jacaranda', gain: 1.45 },
+  tropical: { atlas: 'assets/veg/copa_tropical', gain: 1.4 },
+};
+function speciesOf(e) {
+  const s = `${e.family} ${e.type} ${e.name}`.toLowerCase();
+  if (/palm|palma|tropical/.test(s)) return { sp: 'palma', flower: 0 };
+  if (/cherry|cerezo|jacaranda|guayac|flor/.test(s)) return { sp: 'copa', flower: 1 };   // floración rosa-morada
+  if (/golden chain|lluvia de oro/.test(s)) return { sp: 'copa', flower: 2 };            // floración amarilla
+  if (/almendro|oak|roble|maple|beech|fraxinus|locust|aspen/.test(s)) return { sp: 'copa', flower: 0 };
+  return { sp: 'tropical', flower: 0 };
+}
+function impostorMaterial(tex, meta) {
+  const els = meta.els.slice(0, 5);
+  return new THREE.ShaderMaterial({
+    uniforms: { map: { value: tex }, uAZ: { value: meta.az }, uEls: { value: els }, uLight: { value: 1 }, uSunCol: { value: new THREE.Color(1, 1, 1) }, uGain: { value: meta.gain || 1 } },
+    vertexShader: `
+      attribute float aYaw; attribute float aFlower; attribute float aVar;
+      uniform float uAZ; uniform float uEls[5];
+      varying vec2 vUv0; varying vec2 vUv1; varying float vMix; varying float vFlower; varying float vVar;
+      void main(){
+        vec3 center = (modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+        float S = length((instanceMatrix * vec4(1.0, 0.0, 0.0, 0.0)).xyz);
+        vec3 camRight = vec3(viewMatrix[0][0], viewMatrix[1][0], viewMatrix[2][0]);
+        vec3 camUp = vec3(viewMatrix[0][1], viewMatrix[1][1], viewMatrix[2][1]);
+        vec3 wpos = center + (camRight * position.x + camUp * position.y) * S;
+        vec3 d = normalize(cameraPosition - center);
+        float el = degrees(asin(clamp(d.y, -1.0, 1.0)));
+        int row = 0; float best = 1e9;
+        for (int i = 0; i < 5; i++) { float df = abs(el - uEls[i]); if (df < best) { best = df; row = i; } }
+        float az = atan(d.x, d.z) - aYaw;
+        float fa = mod(az / 6.2831853 * uAZ, uAZ); if (fa < 0.0) fa += uAZ;
+        float a0 = floor(fa); float a1 = mod(a0 + 1.0, uAZ);
+        vMix = fa - a0;
+        float v0 = (4.0 - float(row) + uv.y) / 5.0;
+        vUv0 = vec2((a0 + uv.x) / uAZ, v0);
+        vUv1 = vec2((a1 + uv.x) / uAZ, v0);
+        vFlower = aFlower; vVar = aVar;
+        gl_Position = projectionMatrix * viewMatrix * vec4(wpos, 1.0);
+      }`,
+    fragmentShader: `
+      uniform sampler2D map; uniform float uLight; uniform vec3 uSunCol; uniform float uGain;
+      varying vec2 vUv0; varying vec2 vUv1; varying float vMix; varying float vFlower; varying float vVar;
+      void main(){
+        vec4 c0 = texture2D(map, vUv0), c1 = texture2D(map, vUv1);
+        vec4 c = mix(c0, c1, vMix);
+        if (c.a < 0.5) discard;
+        vec3 col = c.rgb / max(c.a, 0.001);
+        float leaf = smoothstep(0.0, 0.06, col.g - max(col.r, col.b));      // píxeles de follaje
+        float l = dot(col, vec3(0.299, 0.587, 0.114));
+        if (vFlower > 0.5 && vFlower < 1.5) col = mix(col, l * vec3(1.55, 0.95, 2.05) * 1.6, leaf * 0.85);
+        if (vFlower > 1.5) col = mix(col, l * vec3(2.2, 1.85, 0.4) * 1.5, leaf * 0.85);
+        col *= (0.88 + 0.24 * vVar) * uGain;
+        gl_FragColor = vec4(col * uLight * uSunCol, 1.0);
+      }`,
+  });
+}
+async function buildTrees() {
   const veg = ELEMENTS.filter((e) => e.category === 'Vegetación' && e.bbox_view);
   if (!veg.length) return;
-  const isPalm = (e) => /tropical|palm|palma/i.test(`${e.family} ${e.type} ${e.name}`);
-  const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85, side: THREE.DoubleSide });
-  for (const [kind, list] of [['palm', veg.filter(isPalm)], ['broad', veg.filter((e) => !isPalm(e))]]) {
-    if (!list.length) continue;
-    const im = new THREE.InstancedMesh(kind === 'palm' ? palmGeometry() : broadleafGeometry(), mat, list.length);
-    im.castShadow = true; im.receiveShadow = true;
+  const groups = {};
+  for (const e of veg) { const s = speciesOf(e); (groups[s.sp] = groups[s.sp] || []).push({ e, flower: s.flower }); }
+  const tl = new THREE.TextureLoader();
+  const proxyMat = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false });
+  await Promise.all(Object.entries(groups).map(async ([sp, list]) => {
+    const base = SPECIES[sp].atlas;
+    const [meta, tex] = await Promise.all([fetch(base + '.json').then((r) => r.json()), tl.loadAsync(base + '.webp')]);
+    meta.gain = SPECIES[sp].gain;
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+    tex.generateMipmaps = true;
+    const quad = new THREE.PlaneGeometry(1, 1);
+    const geo = new THREE.InstancedBufferGeometry().copy(quad);
+    geo.instanceCount = list.length;
+    const yaw = new Float32Array(list.length), flo = new Float32Array(list.length), vr = new Float32Array(list.length);
+    const bb = new THREE.InstancedMesh(geo, impostorMaterial(tex, meta), list.length);
+    // sombra: volumen invisible con la silueta aproximada (copa + tronco), mismo tamaño que el ejemplar de Revit
+    const proxyGeo = sp === 'palma'
+      ? mergeColored([{ g: new THREE.CylinderGeometry(0.03, 0.035, 0.82, 6).translate(0, 0.41, 0), c: [0, 0, 0] }, { g: new THREE.SphereGeometry(0.42, 10, 6).scale(1, 0.32, 1).translate(0, 0.9, 0), c: [0, 0, 0] }])
+      : mergeColored([{ g: new THREE.CylinderGeometry(0.04, 0.05, 0.4, 6).translate(0, 0.2, 0), c: [0, 0, 0] }, { g: new THREE.SphereGeometry(0.5, 12, 8).scale(1, 0.62, 1).translate(0, 0.64, 0), c: [0, 0, 0] }]);
+    const proxy = new THREE.InstancedMesh(proxyGeo, proxyMat, list.length);
+    proxy.castShadow = true;
     const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(), p = new THREE.Vector3();
-    const col = new THREE.Color();
-    list.forEach((e, i) => {
+    list.forEach(({ e, flower }, i) => {
       const b = e.bbox_view;
       const H = b[4] - b[1], W = Math.max(b[3] - b[0], b[5] - b[2]);
-      p.set((b[0] + b[3]) / 2, b[1], (b[2] + b[5]) / 2);
-      q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), seeded(e.id) * Math.PI * 2);
-      const wx = kind === 'palm' ? W / 0.78 : W / 0.8;
-      s.set(wx, H, wx);
-      m4.compose(p, q, s);
-      im.setMatrixAt(i, m4);
-      const v = 0.85 + 0.3 * seeded(e.id + 7);
-      im.setColorAt(i, col.setRGB(v, v, v));
+      const S = H * meta.size_over_h;
+      p.set((b[0] + b[3]) / 2, b[1] + H / 2, (b[2] + b[5]) / 2);
+      m4.compose(p, q.identity(), s.set(S, S, S));
+      bb.setMatrixAt(i, m4);
+      yaw[i] = seeded(e.id) * Math.PI * 2; flo[i] = flower; vr[i] = seeded(e.id + 11);
+      const cw = sp === 'palma' ? Math.max(W, H * 0.45) : Math.max(W, H * meta.aspect * 0.8);
+      m4.compose(new THREE.Vector3(p.x, b[1], p.z), q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw[i]), s.set(cw, H, cw));
+      proxy.setMatrixAt(i, m4);
     });
-    im.userData.treeIndex = list.map((e) => e.i);
-    im.userData.layer = 'Vegetación';
-    im.computeBoundingSphere();
-    scene.add(im);
-    treeMeshes.push(im);
-  }
+    geo.setAttribute('aYaw', new THREE.InstancedBufferAttribute(yaw, 1));
+    geo.setAttribute('aFlower', new THREE.InstancedBufferAttribute(flo, 1));
+    geo.setAttribute('aVar', new THREE.InstancedBufferAttribute(vr, 1));
+    bb.frustumCulled = false;
+    proxy.computeBoundingSphere();
+    proxy.userData.treeIndex = list.map(({ e }) => e.i);
+    scene.add(bb, proxy);
+    treeBillboards.push(bb);
+    treeMeshes.push(proxy);
+  }));
+  applyVisibility();
 }
 const frame = () => new Promise((r) => requestAnimationFrame(() => r()));
+
+// Algunas caras de Revit (DirectShape) traen la normal invertida respecto al orden de sus vértices:
+// se alinea cada normal con la orientación geométrica del triángulo (no cambia ninguna posición).
+function fixNormals(geo) {
+  const n = geo.attributes.normal, p = geo.attributes.position, idx = geo.index;
+  if (!n || !idx) return 0;
+  const N = new Float32Array(n.count * 3);
+  for (let i = 0; i < n.count; i++) { N[i * 3] = n.getX(i); N[i * 3 + 1] = n.getY(i); N[i * 3 + 2] = n.getZ(i); }
+  const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), g = new THREE.Vector3();
+  const done = new Uint8Array(n.count);
+  const ix = idx.array;
+  let flipped = 0;
+  for (let t = 0; t < ix.length; t += 3) {
+    const i0 = ix[t], i1 = ix[t + 1], i2 = ix[t + 2];
+    if (done[i0] && done[i1] && done[i2]) continue;
+    a.fromBufferAttribute(p, i0); b.fromBufferAttribute(p, i1); c.fromBufferAttribute(p, i2);
+    g.subVectors(c, b).cross(a.clone().sub(b));
+    if (g.lengthSq() < 1e-14) continue;
+    const dot = g.x * N[i0 * 3] + g.y * N[i0 * 3 + 1] + g.z * N[i0 * 3 + 2];
+    if (dot < 0) {
+      for (const v of [i0, i1, i2]) { if (done[v]) continue; N[v * 3] *= -1; N[v * 3 + 1] *= -1; N[v * 3 + 2] *= -1; flipped++; }
+    }
+    done[i0] = done[i1] = done[i2] = 1;
+  }
+  geo.setAttribute('normal', new THREE.BufferAttribute(N, 3));
+  return flipped;
+}
 
 // Carga progresiva de texturas PBR CC0 (el modelo ya se ve con los colores de Revit mientras tanto).
 async function loadTextures(sets) {
@@ -413,7 +524,7 @@ function applyVisibility() {
     const veg = m.userData.layer === 'Vegetación' && treeMeshes.length;   // reemplazada por los árboles 3D
     m.visible = !veg && !isolate && layerOn[m.userData.layer] !== false && statusOn[m.userData.status] !== false;
   }
-  for (const t of treeMeshes) t.visible = !isolate && layerOn['Vegetación'] !== false && statusOn.Existente !== false;
+  for (const t of [...treeMeshes, ...treeBillboards]) t.visible = !isolate && layerOn['Vegetación'] !== false && statusOn.Existente !== false;
   isoGroup.visible = isolate;
 }
 function applyColorMode() {
@@ -904,4 +1015,4 @@ load().catch((err) => {
   console.error(err);
   setLoader(null, 'No se pudo cargar el modelo: ' + err.message);
 });
-window.__visor = { scene, camera, controls, meshes, ELEMENTS: () => ELEMENTS, goView, setMode, select, byId, walk, groundAt };
+window.__visor = { THREE, pickAt, composer, getGtao: () => gtao, sun, renderer, scene, camera, controls, meshes, ELEMENTS: () => ELEMENTS, goView, setMode, select, byId, walk, groundAt };
