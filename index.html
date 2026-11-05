@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Baluarte de San Ignacio · Visor 3D</title>
+<meta name="description" content="Visor 3D interactivo del modelo BIM de la propuesta de concurso en el Baluarte de San Ignacio, Cartagena de Indias.">
+<link rel="stylesheet" href="style.css">
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/",
+    "three-mesh-bvh": "https://cdn.jsdelivr.net/npm/three-mesh-bvh@0.8.3/build/index.module.js"
+  }
+}
+</script>
+</head>
+<body>
+<div id="viewport"></div>
+
+<div id="loader" role="status" aria-live="polite">
+  <div class="loader-card">
+    <div class="loader-title">Baluarte de San Ignacio</div>
+    <div class="loader-sub">Cartagena de Indias · modelo BIM</div>
+    <div class="bar"><span id="loader-bar"></span></div>
+    <div id="loader-text">Cargando modelo…</div>
+  </div>
+</div>
+
+<header id="brand" class="ui">
+  <div class="brand-title">Baluarte de San Ignacio</div>
+  <div class="brand-sub">Cartagena de Indias · Propuesta de concurso · Visor del modelo Revit</div>
+</header>
+
+<div id="toolbar" class="ui" role="toolbar" aria-label="Controles">
+  <div class="seg" role="group" aria-label="Modo de navegación">
+    <button id="mode-orbit" class="on" title="Modo órbita (O)">Órbita</button>
+    <button id="mode-walk" title="Modo recorrido (R)">Recorrido</button>
+  </div>
+  <button id="btn-reset" class="icon" title="Restablecer cámara (Inicio)" aria-label="Restablecer cámara"><svg viewBox="0 0 24 24"><path d="M12 5V2L7 6l5 4V7a5 5 0 1 1-5 5H5a7 7 0 1 0 7-7z"/></svg></button>
+  <button id="btn-shot" class="icon" title="Captura de imagen (P)" aria-label="Captura de imagen"><svg viewBox="0 0 24 24"><path d="M9 4 7.2 6H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-3.2L15 4H9zm3 4.5a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9zm0 2a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z"/></svg></button>
+  <button id="btn-full" class="icon" title="Pantalla completa (F)" aria-label="Pantalla completa"><svg viewBox="0 0 24 24"><path d="M4 9V4h5v2H6v3H4zm10-5h6v5h-2V6h-4V4zM4 15h2v3h3v2H4v-5zm14 0h2v5h-6v-2h4v-3z"/></svg></button>
+  <button id="btn-hide" class="icon" title="Ocultar interfaz (H)" aria-label="Ocultar interfaz"><svg viewBox="0 0 24 24"><path d="M12 6c4.5 0 8.2 2.9 9.5 6-1.3 3.1-5 6-9.5 6S3.8 15.1 2.5 12C3.8 8.9 7.5 6 12 6zm0 2.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7z"/></svg></button>
+</div>
+
+<nav id="rail" class="ui" aria-label="Paneles">
+  <button data-panel="panel-layers" title="Capas" aria-label="Capas"><svg viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5 9-5zm-9 9 9 5 9-5v2.3l-9 5-9-5V12z"/></svg></button>
+  <button data-panel="panel-light" title="Iluminación" aria-label="Iluminación"><svg viewBox="0 0 24 24"><path d="M12 7a5 5 0 1 1 0 10 5 5 0 0 1 0-10zM11 1h2v3h-2V1zm0 19h2v3h-2v-3zM1 11h3v2H1v-2zm19 0h3v2h-3v-2zM4.2 5.6l1.4-1.4 2.1 2.1-1.4 1.4-2.1-2.1zm12.1 12.1 1.4-1.4 2.1 2.1-1.4 1.4-2.1-2.1zM18.4 4.2l1.4 1.4-2.1 2.1-1.4-1.4 2.1-2.1zM6.3 16.3l1.4 1.4-2.1 2.1-1.4-1.4 2.1-2.1z"/></svg></button>
+  <button data-panel="panel-help" title="Controles" aria-label="Controles"><svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 1 0 20 10 10 0 0 1 0-20zm-1 15v2h2v-2h-2zm1-11a4 4 0 0 0-4 4h2a2 2 0 1 1 3 1.7c-1.2.7-2 1.6-2 3.3h2c0-1 .4-1.4 1.1-1.9A4 4 0 0 0 12 6z"/></svg></button>
+</nav>
+
+<section id="panel-layers" class="panel ui" hidden>
+  <h2>Capas</h2>
+  <div class="group">
+    <div class="group-title">Color</div>
+    <div class="seg small" role="group">
+      <button id="color-mat" class="on">Materiales</button>
+      <button id="color-status">Existente / propuesta</button>
+    </div>
+    <div id="status-legend" class="legend" hidden>
+      <span><i class="sw sw-exist"></i>Existente</span>
+      <span><i class="sw sw-prop"></i>Propuesta</span>
+    </div>
+    <label class="row"><input type="checkbox" id="show-exist" checked> Existente</label>
+    <label class="row"><input type="checkbox" id="show-prop" checked> Propuesta</label>
+    <p class="note">Existente / propuesta según el nombre del elemento en Revit: «Pabellon…» y «Rampa…» = propuesta. Las fases de Revit no los distinguen.</p>
+  </div>
+  <div class="group">
+    <div class="group-title">Categorías de Revit</div>
+    <div id="layer-list"></div>
+  </div>
+  <div class="group">
+    <label class="row"><input type="checkbox" id="show-labels" checked> Etiquetas</label>
+  </div>
+</section>
+
+<section id="panel-light" class="panel ui" hidden>
+  <h2>Iluminación diurna</h2>
+  <div class="group">
+    <div class="group-title">Hora local (UTC−5) <span id="time-out">10:30</span></div>
+    <input type="range" id="time" min="6" max="18" step="0.25" value="10.5" aria-label="Hora del día">
+    <div class="group-title">Fecha</div>
+    <select id="month" aria-label="Mes">
+      <option value="1">21 de enero</option><option value="2">21 de febrero</option><option value="3">21 de marzo</option>
+      <option value="4">21 de abril</option><option value="5">21 de mayo</option><option value="6">21 de junio</option>
+      <option value="7">21 de julio</option><option value="8">21 de agosto</option><option value="9">21 de septiembre</option>
+      <option value="10">21 de octubre</option><option value="11">21 de noviembre</option><option value="12">21 de diciembre</option>
+    </select>
+    <div class="group-title">Exposición</div>
+    <input type="range" id="exposure" min="0.4" max="1.6" step="0.05" value="0.72" aria-label="Exposición">
+    <label class="row"><input type="checkbox" id="shadows" checked> Sombras</label>
+    <p class="note">Sol calculado para Cartagena (10,42° N, 75,55° O). Se asume el norte del proyecto de Revit como norte geográfico; el modelo no trae ubicación ni norte verdadero configurados.</p>
+  </div>
+</section>
+
+<section id="panel-help" class="panel ui" hidden>
+  <h2>Controles</h2>
+  <div class="group help">
+    <div class="group-title">Órbita</div>
+    <p><b>Arrastrar</b> rotar · <b>Rueda</b> zoom · <b>Clic derecho / Mayús+arrastrar</b> desplazar · <b>Doble clic</b> pivotar sobre ese punto · <b>Flechas</b> desplazar.</p>
+    <p>Táctil: un dedo rota, dos dedos zoom y desplazamiento, doble toque pivota.</p>
+    <div class="group-title">Recorrido</div>
+    <p><b>Clic</b> en la escena para mirar con el ratón (Esc para soltar) · <b>W A S D</b> / flechas caminar · <b>Mayús</b> correr.</p>
+    <p>Táctil: joystick para caminar, arrastrar para mirar.</p>
+    <div class="group-title">General</div>
+    <p><b>Clic</b> sobre un elemento para ver su información · <b>O</b> órbita · <b>R</b> recorrido · <b>Inicio</b> restablecer · <b>F</b> pantalla completa · <b>H</b> ocultar interfaz · <b>P</b> captura · <b>1–6</b> vistas.</p>
+  </div>
+</section>
+
+<aside id="info" class="ui" hidden aria-live="polite">
+  <button id="info-close" class="close" aria-label="Cerrar">×</button>
+  <div id="info-status" class="chip"></div>
+  <h3 id="info-name"></h3>
+  <dl id="info-list"></dl>
+  <div class="info-actions">
+    <button id="info-frame">Encuadrar</button>
+    <button id="info-isolate">Aislar</button>
+  </div>
+</aside>
+
+<div id="compass" class="ui" title="Norte del proyecto" aria-label="Indicador de orientación">
+  <svg viewBox="0 0 64 64"><circle cx="32" cy="32" r="30"/><g id="needle"><path d="M32 8 39 32H25z" class="n"/><path d="M32 56 25 32h14z" class="s"/></g><text x="32" y="6.5" text-anchor="middle">N</text></svg>
+</div>
+
+<nav id="views" class="ui" aria-label="Vistas predeterminadas">
+  <button data-view="0"><span>1</span>Vista aérea</button>
+  <button data-view="1"><span>2</span>Conjunto patrimonial</button>
+  <button data-view="2"><span>3</span>Frente de la intervención</button>
+  <button data-view="3"><span>4</span>Lateral de la rampa</button>
+  <button data-view="4"><span>5</span>Peatonal desde el acceso</button>
+  <button data-view="5"><span>6</span>Conexión con la muralla</button>
+</nav>
+
+<div id="shot-menu" class="ui panel small-panel" hidden>
+  <h2>Captura</h2>
+  <div class="seg small col" role="group">
+    <button data-scale="1">Pantalla</button>
+    <button data-scale="2">2×</button>
+    <button data-scale="4K">4K (3840 px)</button>
+    <button data-scale="8K">8K (7680 px)</button>
+  </div>
+  <p class="note" id="shot-note">Las etiquetas no se incluyen en la imagen.</p>
+</div>
+
+<div id="walk-hint" class="ui" hidden>Clic para mirar · W A S D para caminar · Mayús correr · Esc soltar</div>
+<div id="joystick" hidden><div id="stick"></div></div>
+<div id="toast" class="ui" hidden></div>
+<button id="btn-show" hidden aria-label="Mostrar interfaz">Mostrar interfaz</button>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
