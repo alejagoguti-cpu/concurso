@@ -14,6 +14,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 
 THREE.BufferGeometry.prototype.computeBoundsTree = computeBoundsTree;
 THREE.BufferGeometry.prototype.disposeBoundsTree = disposeBoundsTree;
@@ -100,6 +101,7 @@ if (quality.ao) {
   gtao.updatePdMaterial({ lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: 6, rings: 2, samples: 12 });
   composer.addPass(gtao);
 }
+if (quality.ao) composer.addPass(new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.18, 0.55, 0.92));
 composer.addPass(new OutputPass());
 const grade = new ShaderPass({
   uniforms: { tDiffuse: { value: null }, sat: { value: 1.14 }, con: { value: 1.07 }, vig: { value: 0.22 } },
@@ -243,6 +245,19 @@ function setLoader(p, text) {
   if (text) $('loader-text').textContent = text;
 }
 
+// Agua de la bahía: refleja el cielo HDRI y tiene oleaje animado (mapa normal de los ejemplos de three.js, MIT).
+let waterMat = null;
+function waterMaterial() {
+  if (waterMat) return waterMat;
+  const n = new THREE.TextureLoader().load('https://cdn.jsdelivr.net/npm/three@0.169.0/examples/textures/waternormals.jpg');
+  n.wrapS = n.wrapT = THREE.RepeatWrapping;
+  n.repeat.set(0.35, 0.35);           // UV del exportador: 1 unidad = 10 m de agua
+  waterMat = new THREE.MeshPhysicalMaterial({ color: 0x2f8a8c, roughness: 0.16, metalness: 0, normalMap: n, normalScale: new THREE.Vector2(0.4, 0.4), clearcoat: 0.6, clearcoatRoughness: 0.1, envMapIntensity: 0.75 });
+  waterMat.name = 'Sitio - Agua mar';
+  return waterMat;
+}
+const waterTime = { value: 0 };
+
 function prepMesh(o) {
   const ud = o.userData || {};
   o.userData.layer = ud.layer || 'Otros';
@@ -263,7 +278,8 @@ function prepMesh(o) {
   o.castShadow = !water && !glass;
   o.receiveShadow = true;
   o.userData.water = water;
-  o.userData.origMat = mat;
+  if (water) o.material = waterMaterial();
+  o.userData.origMat = o.material;
   meshes.push(o);
   if (o.userData.layer !== 'Vegetación' && !glass) walkMeshes.push(o);
 }
@@ -413,9 +429,9 @@ function mergeColored(parts) {
 // y una palma real de alta densidad; 8 azimuts × 5 elevaciones, mezcla entre vistas vecinas.
 const treeBillboards = [];
 const SPECIES = {
-  palma: { atlas: 'assets/veg/palma_real', gain: 0.8 },
-  copa: { atlas: 'assets/veg/jacaranda', gain: 1.45 },
-  tropical: { atlas: 'assets/veg/copa_tropical', gain: 1.4 },
+  palma: { atlas: 'assets/veg/palma_real', gain: 1.7 },
+  copa: { atlas: 'assets/veg/jacaranda', gain: 1.25 },
+  tropical: { atlas: 'assets/veg/copa_tropical', gain: 1.25 },
 };
 function speciesOf(e) {
   const s = `${e.family} ${e.type} ${e.name}`.toLowerCase();
@@ -1084,6 +1100,8 @@ const tmpDir = new THREE.Vector3();
 let fpsAcc = 0, fpsN = 0, fpsT = 0;
 function loop() {
   const dt = Math.min(clock.getDelta(), 0.1);
+  waterTime.value += dt;
+  if (waterMat && waterMat.normalMap) waterMat.normalMap.offset.set(waterTime.value * 0.004, waterTime.value * 0.0025);
   if (fly) {
     fly.t += dt / fly.dur;
     const k = ease(Math.min(fly.t, 1));
