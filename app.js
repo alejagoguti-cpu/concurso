@@ -48,7 +48,7 @@ Object.assign(labelRenderer.domElement.style, { position: 'fixed', inset: '0', p
 container.appendChild(labelRenderer.domElement);
 
 const scene = new THREE.Scene();
-scene.fog = new THREE.Fog(0xcfd8de, 700, 3200);
+scene.fog = new THREE.Fog(0xc9d9e6, 1400, 6500);
 const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.25, 9000);
 camera.position.set(0, 300, 300);
 
@@ -57,7 +57,7 @@ controls.enableDamping = true;
 controls.dampingFactor = 0.08;
 controls.maxPolarAngle = Math.PI * 0.495;
 controls.minDistance = 3;
-controls.maxDistance = 1400;
+controls.maxDistance = 3500;
 controls.screenSpacePanning = false;
 controls.zoomToCursor = true;
 controls.listenToKeyEvents(window);
@@ -99,7 +99,7 @@ envSky.scale.setScalar(1000);
 envScene.add(envSky);
 for (const s of [sky, envSky]) {
   const u = s.material.uniforms;
-  u.turbidity.value = 4.5; u.rayleigh.value = 1.4; u.mieCoefficient.value = 0.004; u.mieDirectionalG.value = 0.82;
+  u.turbidity.value = 2.2; u.rayleigh.value = 2.0; u.mieCoefficient.value = 0.003; u.mieDirectionalG.value = 0.8;   // cielo caribeño despejado
 }
 const pmrem = new THREE.PMREMGenerator(renderer);
 let envRT = null;
@@ -110,7 +110,7 @@ sun.shadow.mapSize.set(quality.shadow, quality.shadow);
 sun.shadow.bias = -0.0003;
 sun.shadow.normalBias = 0.5;
 scene.add(sun, sun.target);
-const hemi = new THREE.HemisphereLight(0xdfe9f3, 0x8a7d68, 0.35);
+const hemi = new THREE.HemisphereLight(0xd6e6f5, 0xa38b68, 0.35);
 scene.add(hemi);
 
 const LAT = 10.42 * D2R, LON = -75.55, TZ = -5;            // Cartagena de Indias
@@ -143,8 +143,8 @@ function updateSun() {
   sun.position.copy(sceneCenter).addScaledVector(dir, 600);
   sun.target.position.copy(sceneCenter);
   const warm = THREE.MathUtils.clamp(up / (25 * D2R), 0, 1);
-  sun.color.setRGB(1, 0.78 + 0.22 * warm, 0.6 + 0.4 * warm);
-  sun.intensity = 3.4 * THREE.MathUtils.clamp(Math.sin(up) * 2.2, 0.15, 1);
+  sun.color.setRGB(1, 0.8 + 0.15 * warm, 0.6 + 0.27 * warm);          // sol tropical, siempre algo cálido
+  sun.intensity = 4.4 * THREE.MathUtils.clamp(Math.sin(up) * 2.2, 0.15, 1);
   hemi.intensity = 0.2 + 0.25 * warm;
   for (const b of treeBillboards) { b.material.uniforms.uLight.value = 0.55 + 0.45 * THREE.MathUtils.clamp(Math.sin(up) * 2, 0, 1); b.material.uniforms.uSunCol.value.copy(sun.color); }
   clearTimeout(envTimer);
@@ -160,7 +160,7 @@ function fitShadow() {
   c.left = -r; c.right = r; c.top = r; c.bottom = -r; c.near = 50; c.far = 1400;
   c.updateProjectionMatrix();
 }
-scene.environmentIntensity = 0.32;
+scene.environmentIntensity = 0.42;
 
 // ---------------------------------------------------------------- utilidades de cajas
 function boxFromView(b) { return new THREE.Box3(new THREE.Vector3(b[0], b[1], b[2]), new THREE.Vector3(b[3], b[4], b[5])); }
@@ -186,6 +186,54 @@ function setLoader(p, text) {
   if (text) $('loader-text').textContent = text;
 }
 
+function prepMesh(o) {
+  const ud = o.userData || {};
+  o.userData.layer = ud.layer || 'Otros';
+  o.userData.status = ud.status || 'Existente';
+  // Posiciones cuantizadas -> Float32 en el mismo espacio local (la transformación del nodo se conserva).
+  const pa = o.geometry.attributes.position;
+  if (!(pa.array instanceof Float32Array) || pa.normalized) {
+    const f = new Float32Array(pa.count * 3);
+    for (let i = 0; i < pa.count; i++) { f[i * 3] = pa.getX(i); f[i * 3 + 1] = pa.getY(i); f[i * 3 + 2] = pa.getZ(i); }
+    o.geometry.setAttribute('position', new THREE.BufferAttribute(f, 3));
+  }
+  fixNormals(o.geometry);
+  const mat = o.material;
+  const mname = (mat.name || '').toLowerCase();
+  const water = mname.includes('agua');
+  const glass = mat.transparent || mname.includes('vidrio') || mname.includes('glass');
+  if (glass) { mat.depthWrite = false; }
+  o.castShadow = !water && !glass;
+  o.receiveShadow = true;
+  o.userData.water = water;
+  o.userData.origMat = mat;
+  meshes.push(o);
+  if (o.userData.layer !== 'Vegetación' && !glass) walkMeshes.push(o);
+}
+
+// Contexto de Cartagena (resto del modelo Revit): se carga después, sin bloquear el visor.
+async function loadContext(texsets) {
+  const head = await fetch('assets/contexto.glb', { method: 'HEAD' }).catch(() => null);
+  if (!head || !head.ok) return;
+  toast('Cargando el contexto de Cartagena…');
+  const loader = new GLTFLoader();
+  loader.setMeshoptDecoder(MeshoptDecoder);
+  const [g, data] = await Promise.all([loader.loadAsync('assets/contexto.glb'), fetch('assets/elements_ctx.json').then((r) => r.json())]);
+  for (const e of data.elements) { ELEMENTS.push(e); byIndex.set(e.i, e); byId.set(e.id, e); }
+  const before = meshes.length;
+  g.scene.traverse((o) => { if (o.isMesh) prepMesh(o); });
+  modelRoot.add(g.scene);
+  modelRoot.updateMatrixWorld(true);
+  const added = meshes.slice(before);
+  await buildTrees(data.elements).catch((err) => console.warn('vegetación contexto', err));
+  buildLayers();
+  applyVisibility();
+  applyColorMode();
+  await loadTextures(texsets || data.texsets, added, false);
+  for (let i = 0; i < added.length; i++) { added[i].geometry.computeBoundsTree(); if (i % 3 === 0) await frame(); }
+  toast(`Contexto de Cartagena cargado (${data.elements.length} elementos)`);
+}
+
 async function load() {
   const loader = new GLTFLoader();
   loader.setMeshoptDecoder(MeshoptDecoder);
@@ -200,31 +248,7 @@ async function load() {
 
   setLoader(0.82, 'Preparando geometría…');
   await frame();
-  gltf.scene.traverse((o) => {
-    if (!o.isMesh) return;
-    const ud = o.userData || {};
-    o.userData.layer = ud.layer || 'Otros';
-    o.userData.status = ud.status || 'Existente';
-    // Posiciones cuantizadas -> Float32 en el mismo espacio local (la transformación del nodo se conserva).
-    const pa = o.geometry.attributes.position;
-    if (!(pa.array instanceof Float32Array) || pa.normalized) {
-      const f = new Float32Array(pa.count * 3);
-      for (let i = 0; i < pa.count; i++) { f[i * 3] = pa.getX(i); f[i * 3 + 1] = pa.getY(i); f[i * 3 + 2] = pa.getZ(i); }
-      o.geometry.setAttribute('position', new THREE.BufferAttribute(f, 3));
-    }
-    fixNormals(o.geometry);
-    const mat = o.material;
-    const mname = (mat.name || '').toLowerCase();
-    const water = mname.includes('agua');
-    const glass = mat.transparent || mname.includes('vidrio') || mname.includes('glass');
-    if (glass) { mat.depthWrite = false; }
-    o.castShadow = !water && !glass;
-    o.receiveShadow = true;
-    o.userData.water = water;
-    o.userData.origMat = mat;
-    meshes.push(o);
-    if (o.userData.layer !== 'Vegetación' && !glass) walkMeshes.push(o);
-  });
+  gltf.scene.traverse((o) => { if (o.isMesh) prepMesh(o); });
   modelRoot.add(gltf.scene);
   modelRoot.updateMatrixWorld(true);
 
@@ -254,6 +278,7 @@ async function load() {
     if (i % 4 === 0) await frame();
   }
   navReady = true;
+  loadContext(data.texsets).catch((err) => console.warn('contexto', err));
 }
 let navReady = false;
 
@@ -388,8 +413,8 @@ function impostorMaterial(tex, meta) {
       }`,
   });
 }
-async function buildTrees() {
-  const veg = ELEMENTS.filter((e) => e.category === 'Vegetación' && e.bbox_view);
+async function buildTrees(list0 = ELEMENTS) {
+  const veg = list0.filter((e) => e.category === 'Vegetación' && e.bbox_view);
   if (!veg.length) return;
   const groups = {};
   for (const e of veg) { const s = speciesOf(e); (groups[s.sp] = groups[s.sp] || []).push({ e, flower: s.flower }); }
@@ -468,11 +493,12 @@ function fixNormals(geo) {
 }
 
 // Carga progresiva de texturas PBR CC0 (el modelo ya se ve con los colores de Revit mientras tanto).
-async function loadTextures(sets) {
+const texCache = new Map();
+async function loadTextures(sets, list = meshes, announce = true) {
   if (!sets) return;
   const tl = new THREE.TextureLoader();
   const aniso = Math.min(8, renderer.capabilities.getMaxAnisotropy());
-  const cache = new Map();
+  const cache = texCache;
   const get = (url, srgb) => {
     if (!cache.has(url)) {
       cache.set(url, tl.loadAsync(url).then((t) => {
@@ -482,7 +508,7 @@ async function loadTextures(sets) {
     }
     return cache.get(url);
   };
-  const mats = new Set(meshes.map((m) => m.userData.origMat));
+  const mats = new Set(list.map((m) => m.userData.origMat));
   let done = 0;
   const jobs = [...mats].filter((m) => m.userData && m.userData.texset && sets[m.userData.texset]).map(async (m) => {
     const s = sets[m.userData.texset];
@@ -494,7 +520,7 @@ async function loadTextures(sets) {
     done++;
   });
   await Promise.all(jobs);
-  toast(`Texturas cargadas (${done} materiales)`);
+  if (announce) toast(`Texturas cargadas (${done} materiales)`);
 }
 
 // ---------------------------------------------------------------- capas
