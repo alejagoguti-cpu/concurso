@@ -6,6 +6,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { Sky } from 'three/addons/objects/Sky.js';
+import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { computeBoundsTree, disposeBoundsTree, acceleratedRaycast } from 'three-mesh-bvh';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
@@ -28,7 +29,16 @@ const RADIUS = 0.3;        // radio del peatón (m)
 // ---------------------------------------------------------------- calidad según dispositivo
 const isTouch = matchMedia('(pointer: coarse)').matches;
 const lowEnd = isTouch || (navigator.hardwareConcurrency || 4) <= 4 || Math.min(screen.width, screen.height) < 700;
-const quality = { dpr: Math.min(devicePixelRatio || 1, lowEnd ? 1.5 : 2), shadow: lowEnd ? 2048 : 4096 };
+let forcedLow = new URLSearchParams(location.search).has('medio');
+try { if (localStorage.getItem('visor-medio') === '1') forcedLow = true; } catch (e) { /* almacenamiento no disponible */ }
+const mem = navigator.deviceMemory || 8;
+const quality = {
+  dpr: Math.min(devicePixelRatio || 1, lowEnd || forcedLow ? 1.25 : 2),
+  shadow: lowEnd || forcedLow ? 2048 : 4096,
+  hiTex: !lowEnd && !forcedLow && mem >= 8,      // texturas 2K solo en equipos con memoria suficiente
+  ao: !lowEnd && !forcedLow,
+  msaa: lowEnd || forcedLow ? 0 : 4,
+};
 
 // ---------------------------------------------------------------- renderer / escena
 const container = $('viewport');
@@ -41,6 +51,19 @@ renderer.toneMappingExposure = 0.72;
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 container.appendChild(renderer.domElement);
+// Si la GPU pierde el contexto (memoria insuficiente), recargar en calidad media en lugar de quedar en blanco.
+renderer.domElement.addEventListener('webglcontextlost', (ev) => {
+  ev.preventDefault();
+  const card = $('loader');
+  card.classList.remove('done');
+  if (!forcedLow) {
+    try { localStorage.setItem('visor-medio', '1'); } catch (e) { /* sin almacenamiento */ }
+    $('loader-text').textContent = 'La tarjeta gráfica se quedó sin memoria. Recargando en calidad media…';
+    setTimeout(() => location.replace(location.pathname + '?medio'), 1500);
+  } else {
+    $('loader-text').textContent = 'La tarjeta gráfica de este equipo no tiene memoria suficiente para el modelo completo.';
+  }
+});
 
 const labelRenderer = new CSS2DRenderer();
 labelRenderer.setSize(innerWidth, innerHeight);
@@ -64,12 +87,12 @@ controls.listenToKeyEvents(window);
 controls.keyPanSpeed = 18;
 
 // ---------------------------------------------------------------- posproceso: oclusión ambiental + corrección de color
-const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(innerWidth * quality.dpr, innerHeight * quality.dpr, { type: THREE.HalfFloatType, samples: lowEnd ? 0 : 4 }));
+const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(innerWidth * quality.dpr, innerHeight * quality.dpr, { type: THREE.HalfFloatType, samples: quality.msaa }));
 composer.setPixelRatio(quality.dpr);
 composer.setSize(innerWidth, innerHeight);
 composer.addPass(new RenderPass(scene, camera));
 let gtao = null;
-if (!lowEnd) {
+if (quality.ao) {
   gtao = new GTAOPass(scene, camera, innerWidth, innerHeight);
   gtao.output = GTAOPass.OUTPUT.Default;
   gtao.blendIntensity = 0.9;
@@ -147,12 +170,46 @@ function updateSun() {
   sun.intensity = 4.4 * THREE.MathUtils.clamp(Math.sin(up) * 2.2, 0.15, 1);
   hemi.intensity = 0.2 + 0.25 * warm;
   for (const b of treeBillboards) { b.material.uniforms.uLight.value = 0.55 + 0.45 * THREE.MathUtils.clamp(Math.sin(up) * 2, 0, 1); b.material.uniforms.uSunCol.value.copy(sun.color); }
+  if (hdri) { alignHdri(dir); return; }
   clearTimeout(envTimer);
   envTimer = setTimeout(() => {
     if (envRT) envRT.dispose();
     envRT = pmrem.fromScene(envScene, 0.02);
     scene.environment = envRT.texture;
   }, 60);
+}
+
+// Cielo HDRI real (Poly Haven, CC0): fondo, luz ambiental y reflejos. Se gira para que su sol coincida con el sol calculado.
+let hdri = null;
+function alignHdri(dir) {
+  const theta = Math.atan2(dir.x, dir.z) - Math.atan2(hdri.sun.x, hdri.sun.z);
+  scene.backgroundRotation.set(0, theta, 0);
+  scene.environmentRotation.set(0, theta, 0);
+}
+async function loadSky() {
+  const tex = await new RGBELoader().loadAsync(quality.hiTex ? 'assets/sky/cielo_2k.hdr' : 'assets/sky/cielo_1k.hdr');
+  tex.mapping = THREE.EquirectangularReflectionMapping;
+  // dirección del sol en el HDRI = píxel más brillante
+  const { data, width: W, height: H } = tex.image;
+  const half = data instanceof Uint16Array;
+  let best = -1, bx = 0, by = 0;
+  for (let y = 0; y < H / 2; y++) for (let x = 0; x < W; x++) {
+    const i = (y * W + x) * 4;
+    const r = half ? THREE.DataUtils.fromHalfFloat(data[i]) : data[i];
+    const g = half ? THREE.DataUtils.fromHalfFloat(data[i + 1]) : data[i + 1];
+    const l = r + g;
+    if (l > best) { best = l; bx = x; by = y; }
+  }
+  const u = (bx + 0.5) / W, v = 1 - (by + 0.5) / H;
+  const ang = (u - 0.5) * 2 * Math.PI, el = (v - 0.5) * Math.PI;
+  const sunDir = new THREE.Vector3(Math.cos(ang) * Math.cos(el), Math.sin(el), Math.sin(ang) * Math.cos(el));
+  const envMap = pmrem.fromEquirectangular(tex).texture;
+  hdri = { tex, sun: sunDir };
+  scene.background = tex;
+  scene.environment = envMap;
+  scene.backgroundIntensity = 1.0;
+  sky.visible = false;
+  updateSun();
 }
 function fitShadow() {
   const r = Math.min(sceneRadius, 220);
@@ -494,12 +551,32 @@ function fixNormals(geo) {
 
 // Carga progresiva de texturas PBR CC0 (el modelo ya se ve con los colores de Revit mientras tanto).
 const texCache = new Map();
+// Rompe la repetición visible de las texturas: segunda muestra girada y variación de tono a gran escala.
+function antiTiling(m) {
+  m.onBeforeCompile = (shader) => {
+    shader.fragmentShader = shader.fragmentShader.replace('#include <map_fragment>', `#include <map_fragment>
+      #ifdef USE_MAP
+        vec2 ruv = mat2(0.8, -0.6, 0.6, 0.8) * vMapUv * 0.63 + vec2(0.17, 0.41);
+        vec3 c2 = texture2D(map, ruv).rgb;
+        vec3 macroC = texture2D(map, vMapUv * 0.071 + vec2(0.31, 0.17)).rgb;
+        vec3 avgC = textureLod(map, vMapUv, 12.0).rgb;
+        float lumAvg = max(dot(avgC, vec3(0.299, 0.587, 0.114)), 1e-3);
+        float mf = clamp(dot(macroC, vec3(0.299, 0.587, 0.114)) / lumAvg, 0.7, 1.3);
+        float w = smoothstep(0.85, 1.15, mf) * 0.5;
+        vec3 tint = diffuseColor.rgb / max(sampledDiffuseColor.rgb, vec3(1e-3));
+        diffuseColor.rgb = mix(diffuseColor.rgb, tint * c2, w);
+        diffuseColor.rgb *= mix(1.0, mf, 0.55);
+      #endif`);
+  };
+  m.customProgramCacheKey = () => 'antitiling';
+}
 async function loadTextures(sets, list = meshes, announce = true) {
   if (!sets) return;
   const tl = new THREE.TextureLoader();
   const aniso = Math.min(8, renderer.capabilities.getMaxAnisotropy());
   const cache = texCache;
-  const get = (url, srgb) => {
+  const get = (url0, srgb) => {
+    const url = quality.hiTex ? url0 : url0.replace('_2K-JPG_', '_1K-JPG_');
     if (!cache.has(url)) {
       cache.set(url, tl.loadAsync(url).then((t) => {
         t.wrapS = t.wrapT = THREE.RepeatWrapping; t.flipY = false; t.anisotropy = aniso;
@@ -516,6 +593,7 @@ async function loadTextures(sets, list = meshes, announce = true) {
     if (c) m.map = c;
     if (n) { m.normalMap = n; m.normalScale.set(0.9, 0.9); }
     if (r) { m.roughnessMap = r; m.roughness = 1; }
+    antiTiling(m);
     m.needsUpdate = true;
     done++;
   });
@@ -1037,6 +1115,7 @@ addEventListener('resize', () => {
 
 updateSun();
 loop();
+loadSky().catch((err) => console.warn('cielo HDRI', err));
 load().catch((err) => {
   console.error(err);
   setLoader(null, 'No se pudo cargar el modelo: ' + err.message);
