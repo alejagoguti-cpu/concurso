@@ -672,7 +672,6 @@ const LABELS = [
   { text: 'Muralla San Juan Evangelista - Torre del Reloj', pred: nameStarts('Muralla San Juan Evangelista') },
   { text: 'Contexto - Iglesia con domo', pred: nameStarts('Contexto - Iglesia') },
   { text: 'Pabellon', pred: nameStarts('Pabellon'), prop: true },
-  { text: 'Rampa de marmol', pred: (e) => e.id === 877166, prop: true, lift: 7 },
 ];
 function buildLabels() {
   for (const L of LABELS) {
